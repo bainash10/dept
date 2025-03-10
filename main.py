@@ -61,6 +61,48 @@ def prepare_image(image, model_name):
 
     return otsu_image
 
+def segment_characters(image, model_name):
+    """Segment characters from the word image and prepare them for prediction."""
+    image = Image.open(image).convert("L")
+    image = np.array(image, dtype=np.uint8)
+    
+    # Apply thresholding for segmentation
+    _, thresh = cv2.threshold(image, 128, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    character_images = []
+    bounding_boxes = []
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        char_image = image[y:y+h, x:x+w]
+        char_image = cv2.resize(char_image, IMAGE_SIZES[model_name])
+        char_image = char_image.astype('float32') / 255.0
+        char_image = np.expand_dims(char_image, axis=(0, -1))
+        character_images.append(char_image)
+        bounding_boxes.append((x, y, w, h))
+    
+    # Sort characters left to right
+    sorted_characters = sorted(zip(character_images, bounding_boxes), key=lambda b: b[1][0])
+    return [char[0] for char in sorted_characters]
+
+def predict_characters(image, model_name):
+    """Predict the word using the chosen model."""
+    character_images = segment_characters(image, model_name)
+    model = load_model_lazy(model_name)
+    
+    if isinstance(model, str):  # Model failed to load
+        return model
+
+    combined_prediction = ""
+
+    for char_image in character_images:
+        pred = model.predict(char_image)
+        predicted_class_index = np.argmax(pred, axis=-1)[0]
+        predicted_class_label = class_labels[predicted_class_index]
+        combined_prediction += predicted_class_label
+
+    return combined_prediction
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -91,6 +133,31 @@ def predict():
         predicted_label = class_labels[predicted_class]
         
         return jsonify({"prediction": predicted_label})
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {e}"}), 500
+
+@app.route('/predict-word', methods=['POST'])
+def predict_word():
+    """Predict a word using the chosen model."""
+    if 'image' not in request.files or 'model' not in request.form:
+        return jsonify({"error": "No file or model selected"}), 400
+    
+    image_file = request.files['image']
+    model_name = request.form['model']
+    
+    if image_file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    if model_name not in MODEL_PATHS:
+        return jsonify({"error": "Invalid model selected"}), 400
+
+    try:
+        predicted_text = predict_characters(image_file, model_name)
+        
+        if isinstance(predicted_text, str) and "error" in predicted_text.lower():
+            return jsonify({"error": predicted_text}), 500
+
+        return jsonify({"prediction": predicted_text})
     except Exception as e:
         return jsonify({"error": f"An error occurred: {e}"}), 500
 

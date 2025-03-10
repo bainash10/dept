@@ -107,6 +107,11 @@ def predict_characters(image, model_name):
 def index():
     return render_template('index.html')
 
+@app.route('/learn')
+def learn():
+    return render_template('learn.html')
+
+
 @app.route('/predict', methods=['POST'])
 def predict():
     """Predict a single character using the chosen model."""
